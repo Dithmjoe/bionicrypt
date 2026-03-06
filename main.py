@@ -9,14 +9,17 @@ from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.filechooser import FileChooserIconView
 from kivy.uix.popup import Popup
-from kivy.utils import get_color_from_hex
 from kivy.clock import Clock
 import cryptomatic4000
 from cryptomatic4000 import PasswordFileEncryptor
 import numpy as np
 import cv2
+import CRUD
 
-# UI Design using KV Language
+# Directory anchored to this file's location
+BASE_DIR = os.path.dirname(__file__)
+
+# ─── UI Definition ────────────────────────────────────────────────────────────
 Builder.load_string('''
 <LoginScreen>:
     BoxLayout:
@@ -92,7 +95,7 @@ Builder.load_string('''
             color: 0.1, 0.45, 0.9, 1
             on_press: root.manager.current = 'signup'
 
-        Widget: # Spacer
+        Widget:
 
 <SignUpScreen>:
     BoxLayout:
@@ -179,7 +182,7 @@ Builder.load_string('''
                 pos: self.pos
                 size: self.size
 
-        # Header bar with Drive title + Logout button
+        # Header
         BoxLayout:
             size_hint_y: None
             height: '64dp'
@@ -297,10 +300,10 @@ Builder.load_string('''
         font_size: '15sp'
 
     Button:
-        id: decrypt_btn
-        text: 'Decrypt'
+        id: download_decrypt_btn
+        text: 'Download & Decrypt'
         size_hint: None, None
-        size: '90dp', '36dp'
+        size: '160dp', '36dp'
         pos_hint: {'center_y': 0.5}
         background_normal: ''
         background_color: 0, 0, 0, 0
@@ -322,54 +325,7 @@ Builder.load_string('''
 ''')
 
 
-class FileEntry(BoxLayout):
-    """A single row in the drive list. Holds the encrypted file path and exposes a Decrypt button."""
-
-    def __init__(self, filename, filepath, **kwargs):
-        super().__init__(**kwargs)
-        self.enc_filepath = filepath          # full path to .enc file
-        self.original_name = filename         # display name (e.g. photo.jpg.enc)
-        self.ids.file_name.text = filename
-        self.ids.decrypt_btn.bind(on_release=self.decrypt_file)
-
-    def decrypt_file(self, *args):
-        app = App.get_running_app()
-        if not app.vault_key:
-            self._show_popup("Not Logged In", "No vault key found. Please log in again.")
-            return
-
-        enc_path = self.enc_filepath
-        if not os.path.exists(enc_path):
-            self._show_popup("File Missing", f"Encrypted file not found:\n{enc_path}")
-            return
-
-        # Output path: dec_file/ folder, strip .enc suffix
-        dec_dir = os.path.join(os.path.dirname(__file__), 'dec_file')
-        os.makedirs(dec_dir, exist_ok=True)
-        base_name = os.path.basename(enc_path)
-        out_name = base_name[:-4] if base_name.endswith('.enc') else base_name + '.decrypted'
-        out_path = os.path.join(dec_dir, out_name)
-
-        try:
-            encryptor = PasswordFileEncryptor(str(app.vault_key))
-            encryptor.decrypt_file(enc_path, out_path)
-            self._show_popup("Decrypted", f"File saved to dec_file/:\n{out_name}")
-            print(f"Decrypted: {enc_path} -> {out_path}")
-        except Exception as e:
-            self._show_popup("Decryption Failed", f"Could not decrypt:\n{e}")
-            print(f"Decryption error: {e}")
-
-    def _show_popup(self, title, message):
-        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
-        content.add_widget(Label(text=message))
-        btn = Button(text='OK', size_hint=(1, 0.3))
-        content.add_widget(btn)
-        popup = Popup(title=title, content=content, size_hint=(0.85, 0.45))
-        btn.bind(on_release=popup.dismiss)
-        popup.open()
-
-
-# ── Shared helper for capturing a frame from the Kivy camera ──────────────────
+# ─── Camera Helper ────────────────────────────────────────────────────────────
 
 def _camera_to_cv2(camera):
     """Convert a Kivy Camera widget's current texture to an OpenCV BGR image."""
@@ -380,16 +336,88 @@ def _camera_to_cv2(camera):
     pixels = texture.pixels
     arr = np.frombuffer(pixels, dtype=np.uint8).reshape((size[1], size[0], 4))
     bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-    return cv2.flip(bgr, 0)   # Kivy: origin bottom-left; OpenCV: top-left
+    return cv2.flip(bgr, 0)   # Kivy: origin bottom-left → OpenCV: top-left
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── File Entry Row ───────────────────────────────────────────────────────────
+
+class FileEntry(BoxLayout):
+    """
+    A single row in the drive list.
+    'Download & Decrypt' button:
+      1. Fetch the .enc file from the server (falls back to local enc_file/ copy)
+      2. Decrypt on device using the vault key
+      3. Save to dec_file/
+    """
+
+    def __init__(self, filename, filepath, **kwargs):
+        super().__init__(**kwargs)
+        self.enc_filename = filename          # e.g. photo.jpg.enc
+        self.enc_filepath = filepath          # full path to local .enc file
+        self.ids.file_name.text = filename
+        self.ids.download_decrypt_btn.bind(on_release=self.download_and_decrypt)
+
+    def download_and_decrypt(self, *args):
+        app = App.get_running_app()
+        if not app.vault_key:
+            self._show_popup("Not Logged In", "No vault key found. Please log in again.")
+            return
+
+        username = app.current_username or "unknown"
+        enc_dir = os.path.join(BASE_DIR, 'enc_file')
+        os.makedirs(enc_dir, exist_ok=True)
+        local_enc_path = os.path.join(enc_dir, self.enc_filename)
+
+        # ── Step 1: Fetch encrypted file from server ──────────────────────────
+        fetched = False
+        try:
+            fetched = CRUD.retrieveFile(username, self.enc_filename, local_enc_path)
+        except Exception as e:
+            print(f"[CRUD] retrieveFile error (will use local copy): {e}")
+
+        if not fetched:
+            # Fall back to whatever is already in enc_file/
+            if not os.path.exists(local_enc_path):
+                self._show_popup(
+                    "File Not Found",
+                    f"Could not download '{self.enc_filename}' from server and no local copy exists."
+                )
+                return
+            print(f"[Offline] Using local copy: {local_enc_path}")
+
+        # ── Step 2: Decrypt on device ─────────────────────────────────────────
+        dec_dir = os.path.join(BASE_DIR, 'dec_file')
+        os.makedirs(dec_dir, exist_ok=True)
+        base_name = os.path.basename(local_enc_path)
+        out_name = base_name[:-4] if base_name.endswith('.enc') else base_name + '.decrypted'
+        out_path = os.path.join(dec_dir, out_name)
+
+        try:
+            encryptor = PasswordFileEncryptor(str(app.vault_key))
+            encryptor.decrypt_file(local_enc_path, out_path)
+            self._show_popup(
+                "Downloaded & Decrypted",
+                f"File saved to dec_file/:\n{out_name}"
+            )
+            print(f"Decrypted: {local_enc_path} -> {out_path}")
+        except Exception as e:
+            self._show_popup("Decryption Failed", f"Could not decrypt:\n{e}")
+            print(f"Decryption error: {e}")
+
+    def _show_popup(self, title, message):
+        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        content.add_widget(Label(text=message))
+        btn = Button(text='OK', size_hint=(1, 0.3))
+        content.add_widget(btn)
+        popup = Popup(title=title, content=content, size_hint=(0.85, 0.5))
+        btn.bind(on_release=popup.dismiss)
+        popup.open()
+
+
+# ─── Login Screen ─────────────────────────────────────────────────────────────
 
 class LoginScreen(Screen):
     def on_enter(self):
-        Clock.schedule_once(self._start_camera, 0.3)
-
-    def _start_camera(self, dt):
         self.camera = Camera(resolution=(640, 480), play=True, index=0)
         self.ids.login_camera_container.add_widget(self.camera)
 
@@ -402,29 +430,40 @@ class LoginScreen(Screen):
     def capture_and_login(self):
         username = self.ids.username_input.text.strip()
         if not username:
-            self.show_error_popup("Missing Info", "Please enter a username.")
+            self._show_popup("Missing Info", "Please enter a username.")
             return
         if not self.camera:
-            self.show_error_popup("Camera Error", "Camera not available.")
+            self._show_popup("Camera Error", "Camera not available.")
             return
 
         image_cv = _camera_to_cv2(self.camera)
         if image_cv is None:
-            self.show_error_popup("Capture Error", "Could not capture image from camera.")
+            self._show_popup("Capture Error", "Could not capture image from camera.")
             return
 
-        print(f"Verifying vault for {username}...")
+        # ── Step 1: Pull vault from server (non-fatal fallback to local) ───────
+        vault_path = os.path.join(BASE_DIR, "vault.pkl")
+        try:
+            CRUD.retrieveVault(username, vault_path)
+            print(f"[Login] Vault fetched from server for '{username}'.")
+        except Exception as e:
+            print(f"[Login][CRUD] Could not fetch vault from server: {e}")
+            print("[Login] Falling back to local vault.pkl if it exists.")
+
+        # ── Step 2: Verify face against vault ─────────────────────────────────
+        print(f"Verifying vault for '{username}'...")
         recovered_key = cryptomatic4000.verify_vault(image_cv, username)
 
         if recovered_key:
-            # Store key in App singleton for encryption / decryption
-            App.get_running_app().vault_key = recovered_key
-            print(f"Login successful! Key stored.")
+            app = App.get_running_app()
+            app.vault_key = recovered_key
+            app.current_username = username
+            print(f"[Login] Successful. Key stored.")
             self.manager.current = 'dashboard'
         else:
-            self.show_error_popup("Verification Failed", "Face verification failed or user not found.")
+            self._show_popup("Verification Failed", "Face verification failed or user not found.")
 
-    def show_error_popup(self, title, message):
+    def _show_popup(self, title, message):
         content = BoxLayout(orientation='vertical', padding=10, spacing=10)
         content.add_widget(Label(text=message))
         btn = Button(text='OK', size_hint=(1, 0.3))
@@ -434,11 +473,10 @@ class LoginScreen(Screen):
         popup.open()
 
 
+# ─── Sign Up Screen ───────────────────────────────────────────────────────────
+
 class SignUpScreen(Screen):
     def on_enter(self):
-        Clock.schedule_once(self._start_camera, 0.3)
-
-    def _start_camera(self, dt):
         self.camera = Camera(resolution=(640, 480), play=True, index=0)
         self.ids.signup_camera_container.add_widget(self.camera)
 
@@ -451,32 +489,47 @@ class SignUpScreen(Screen):
     def capture_and_signup(self):
         username = self.ids.signup_username.text.strip()
         if not username:
-            self.show_error_popup("Missing Info", "Please enter a username.")
+            self._show_popup("Missing Info", "Please enter a username.")
             return
         if not self.camera:
-            self.show_error_popup("Camera Error", "Camera not available.")
+            self._show_popup("Camera Error", "Camera not available.")
             return
 
         image_cv = _camera_to_cv2(self.camera)
         if image_cv is None or image_cv.size == 0:
-            self.show_error_popup("Capture Error", "Captured image is empty. Check your camera.")
+            self._show_popup("Capture Error", "Captured image is empty. Check your camera.")
             return
 
-        print(f"Creating vault for {username}...")
+        print(f"Creating vault for '{username}'...")
+
+        # ── Step 1: Enroll face → create local vault.pkl ──────────────────────
         success = cryptomatic4000.enroll_vault(image_cv, username)
 
-        if success:
-            print(f"Vault created for {username}!")
-            # After enrolment, verify immediately so we have the vault key
-            recovered_key = cryptomatic4000.verify_vault(image_cv, username)
-            if recovered_key:
-                App.get_running_app().vault_key = recovered_key
-                print("Vault key stored after enrolment.")
-            self.manager.current = 'dashboard'
-        else:
-            self.show_error_popup("Enrollment Failed", "Could not create vault. Make sure your face is visible.")
+        if not success:
+            self._show_popup("Enrollment Failed", "Could not create vault. Make sure your face is visible.")
+            return
 
-    def show_error_popup(self, title, message):
+        print(f"[SignUp] Vault created for '{username}'.")
+
+        # ── Step 2: Upload vault to server ────────────────────────────────────
+        vault_path = os.path.join(BASE_DIR, "vault.pkl")
+        try:
+            CRUD.vaultUpload(username, vault_path)
+            print(f"[SignUp] Vault uploaded to server for '{username}'.")
+        except Exception as e:
+            print(f"[SignUp][CRUD] Vault upload failed (continuing anyway): {e}")
+
+        # ── Step 3: Verify immediately to get the vault key ───────────────────
+        recovered_key = cryptomatic4000.verify_vault(image_cv, username)
+        if recovered_key:
+            app = App.get_running_app()
+            app.vault_key = recovered_key
+            app.current_username = username
+            print("[SignUp] Vault key stored after enrolment.")
+
+        self.manager.current = 'dashboard'
+
+    def _show_popup(self, title, message):
         content = BoxLayout(orientation='vertical', padding=10, spacing=10)
         content.add_widget(Label(text=message))
         btn = Button(text='OK', size_hint=(1, 0.3))
@@ -486,24 +539,27 @@ class SignUpScreen(Screen):
         popup.open()
 
 
+# ─── Dashboard Screen ─────────────────────────────────────────────────────────
+
 class DashboardScreen(Screen):
 
     def on_enter(self):
         """Reload enc_file/ contents every time the dashboard is shown."""
         self.ids.file_grid.clear_widgets()
-        enc_dir = os.path.join(os.path.dirname(__file__), 'enc_file')
-        if not os.path.isdir(enc_dir):
-            return
+        enc_dir = os.path.join(BASE_DIR, 'enc_file')
+        os.makedirs(enc_dir, exist_ok=True)
         for fname in sorted(os.listdir(enc_dir)):
             fpath = os.path.join(enc_dir, fname)
             if os.path.isfile(fpath):
-                self.add_file_to_drive(fname, fpath)
+                self._add_file_entry(fname, fpath)
 
     def logout(self):
-        """Clear the stored vault key and return to the login screen."""
-        App.get_running_app().vault_key = None
+        """Clear vault key and username, return to login screen."""
+        app = App.get_running_app()
+        app.vault_key = None
+        app.current_username = None
         self.ids.file_grid.clear_widgets()
-        print("Logged out. Vault key cleared.")
+        print("Logged out.")
         self.manager.current = 'login'
 
     def open_file_chooser(self):
@@ -524,49 +580,69 @@ class DashboardScreen(Screen):
             if file_chooser.selection:
                 filepath = file_chooser.selection[0]
                 popup.dismiss()
-                self.encrypt_and_add(filepath)
+                self.encrypt_and_upload(filepath)
 
         select_button.bind(on_release=on_selection)
         cancel_button.bind(on_release=popup.dismiss)
         popup.open()
 
-    def encrypt_and_add(self, filepath):
-        """Encrypt the selected file into enc_file/ using the vault key."""
+    def encrypt_and_upload(self, filepath):
+        """
+        Full upload flow:
+          1. Encrypt the file locally into enc_file/
+          2. Upload the encrypted .enc file to the server
+          3. Add to the dashboard grid
+        """
         app = App.get_running_app()
         if not app.vault_key:
             self._show_popup("Not Logged In", "No vault key available. Please log in again.")
             return
 
-        enc_dir = os.path.join(os.path.dirname(__file__), 'enc_file')
+        enc_dir = os.path.join(BASE_DIR, 'enc_file')
         os.makedirs(enc_dir, exist_ok=True)
         enc_path = os.path.join(enc_dir, os.path.basename(filepath) + '.enc')
+
+        # ── Step 1: Encrypt locally ───────────────────────────────────────────
         try:
             encryptor = PasswordFileEncryptor(str(app.vault_key))
             encryptor.encrypt_file(filepath, enc_path)
-            display_name = os.path.basename(enc_path)
-            self.add_file_to_drive(display_name, enc_path)
-            self._show_popup("Encrypted", f"File encrypted and saved to enc_file/:\n{display_name}")
-            print(f"Encrypted: {filepath} -> {enc_path}")
+            print(f"[Upload] Encrypted: {filepath} -> {enc_path}")
         except Exception as e:
             self._show_popup("Encryption Failed", f"Could not encrypt file:\n{e}")
-            print(f"Encryption error: {e}")
+            print(f"[Upload] Encryption error: {e}")
+            return
 
-    def add_file_to_drive(self, filename, filepath):
-        file_grid = self.ids.file_grid
-        file_grid.add_widget(FileEntry(filename=filename, filepath=filepath))
+        # ── Step 2: Upload encrypted file to server ───────────────────────────
+        username = app.current_username or "unknown"
+        try:
+            CRUD.fileUpload(username, enc_path)
+            print(f"[Upload] Encrypted file uploaded to server: {enc_path}")
+        except Exception as e:
+            print(f"[Upload][CRUD] Server upload failed (file still saved locally): {e}")
+
+        # ── Step 3: Add to dashboard ──────────────────────────────────────────
+        display_name = os.path.basename(enc_path)
+        self._add_file_entry(display_name, enc_path)
+        self._show_popup("Encrypted & Uploaded", f"File encrypted and uploaded:\n{display_name}")
+
+    def _add_file_entry(self, filename, filepath):
+        self.ids.file_grid.add_widget(FileEntry(filename=filename, filepath=filepath))
 
     def _show_popup(self, title, message):
         content = BoxLayout(orientation='vertical', padding=10, spacing=10)
         content.add_widget(Label(text=message))
         btn = Button(text='OK', size_hint=(1, 0.3))
         content.add_widget(btn)
-        popup = Popup(title=title, content=content, size_hint=(0.85, 0.45))
+        popup = Popup(title=title, content=content, size_hint=(0.85, 0.5))
         btn.bind(on_release=popup.dismiss)
         popup.open()
 
 
+# ─── App Entry Point ──────────────────────────────────────────────────────────
+
 class BionicryptApp(App):
-    vault_key = None   # Shared vault key set on login / signup, cleared on logout
+    vault_key = None           # Shared vault key — set on login/signup, cleared on logout
+    current_username = None    # Active username — used for CRUD server calls
 
     def build(self):
         self.title = 'Bionicrypt'

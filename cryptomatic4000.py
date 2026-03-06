@@ -5,17 +5,18 @@ import os
 from facialVaultifier import verifier, capture_image, enroller
 import cv2
 import evaluator
-import os
 
-path = os.getcwd()
+# Base path anchored to this file's location
+path = os.path.dirname(__file__)
 userName = "john cena"
+
 
 class PasswordFileEncryptor:
     def __init__(self, password):
         self.password = password.encode()
-    
+
     def _derive_key(self, salt):
-        # Derive encryption key from password
+        """Derive an AES-256 encryption key from the password + salt."""
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
@@ -23,96 +24,93 @@ class PasswordFileEncryptor:
             iterations=480000,
         )
         return kdf.derive(self.password)
-    
+
     def encrypt_file(self, input_path, output_path):
-        """Encrypt file with password"""
-        # Generate random salt
+        """Encrypt a file with the password-derived key and write to output_path."""
         salt = os.urandom(16)
-        key1 = self._derive_key(salt)
-        key2 = self._derive_key(salt)
-        print("key2 = " + str(key2.hex()))
-        print("key1 = " + str(key1.hex()))
-        
-        # Read file
+        key = self._derive_key(salt)
+
         with open(input_path, 'rb') as f:
             plaintext = f.read()
-        
-        # Encrypt
-        cipher = AESGCM(key1)
+
+        cipher = AESGCM(key)
         nonce = os.urandom(12)
         ciphertext = cipher.encrypt(nonce, plaintext, None)
-        
-        # Write: salt + nonce + ciphertext
+
+        # Layout: [16-byte salt][12-byte nonce][ciphertext]
         with open(output_path, 'wb') as f:
             f.write(salt + nonce + ciphertext)
-        
-        print(f"✓ Encrypted: {input_path}")
-    
+
+        print(f"Encrypted: {input_path} -> {output_path}")
+
     def decrypt_file(self, input_path, output_path):
-        """Decrypt file with password"""
-        # Read encrypted file
+        """Decrypt a file that was encrypted with encrypt_file."""
         with open(input_path, 'rb') as f:
             encrypted_data = f.read()
-        from cryptography.hazmat.primitives import hashes
-        # Extract components
+
         salt = encrypted_data[:16]
         nonce = encrypted_data[16:28]
         ciphertext = encrypted_data[28:]
-        
-        # Derive key from password
+
         key = self._derive_key(salt)
-        
-        # Decrypt
         cipher = AESGCM(key)
         plaintext = cipher.decrypt(nonce, ciphertext, None)
-        
-        # Write decrypted file
+
         with open(output_path, 'wb') as f:
             f.write(plaintext)
-        
-        print(f"✓ Decrypted: {input_path}")
+
+        print(f"Decrypted: {input_path} -> {output_path}")
+
 
 def enroll_vault(image, username):
-    """Enrolls a new face vault for the given username."""
+    """Enroll a new biometric vault for username. Returns True on success."""
     the_key = evaluator.keyGiver(username)
     return enroller(image, the_key)
 
+
 def verify_vault(image, username):
-    """Verifies the face vault for the given username."""
+    """Verify the biometric vault for username. Returns secret key string or None."""
     the_key = evaluator.keyGiver(username)
     password = verifier(image, the_key)
-    if password:
+    if password is not None:
         return str(password)
     return None
 
+
 if __name__ == "__main__":
     mode = input("Enter mode (enroll/verify): ").strip().lower()
-    # For test case can be removed in production
-    if input("Is this a test?(y/n)").strip().lower()=="y":
-        path_test = input("Enter the test image file name:")
+    if input("Is this a test? (y/n): ").strip().lower() == "y":
+        path_test = input("Enter the test image file name: ")
         if not path_test:
             path_test = "athul.png"
         image = cv2.imread(path_test)
     else:
         image = capture_image()
-    
+
     if mode in ["enroll", "e"]:
         enroll_vault(image, userName)
     else:
         password = verify_vault(image, userName)
         if password:
-            # Usage with password
             encryptor = PasswordFileEncryptor(password)
-
-            encOrDec = input("Do you want to encrypt or decrypt?").strip().lower()
-
+            encOrDec = input("Encrypt or decrypt? (e/d): ").strip().lower()
             if encOrDec in ['e', 'encrypt']:
-                # Encrypt files in the current working directory
-                encryptor.encrypt_file(os.path.join(path, 'vacation.png'), os.path.join(path, 'vacation.png.enc'))
-                encryptor.encrypt_file(os.path.join(path, 'family_video.mp4'), os.path.join(path, 'family_video.mp4.enc'))
+                encryptor.encrypt_file(
+                    os.path.join(path, 'vacation.png'),
+                    os.path.join(path, 'vacation.png.enc')
+                )
+                encryptor.encrypt_file(
+                    os.path.join(path, 'family_video.mp4'),
+                    os.path.join(path, 'family_video.mp4.enc')
+                )
             else:
-                # Decrypt (need same password)
-                encryptor.decrypt_file(os.path.join(path, 'vacation.png.enc'), os.path.join(path, 'vacation_restored.png'))
-                encryptor.decrypt_file(os.path.join(path, 'family_video.mp4.enc'), os.path.join(path, 'family_video_restored.mp4'))
+                encryptor.decrypt_file(
+                    os.path.join(path, 'vacation.png.enc'),
+                    os.path.join(path, 'vacation_restored.png')
+                )
+                encryptor.decrypt_file(
+                    os.path.join(path, 'family_video.mp4.enc'),
+                    os.path.join(path, 'family_video_restored.mp4')
+                )
         else:
             print("Verification failed.")

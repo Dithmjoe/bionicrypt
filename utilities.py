@@ -1,7 +1,7 @@
 import os
 
 # Base path for project files (current working directory)
-BASE_PATH = os.getcwd()
+BASE_PATH = os.path.dirname(__file__)
 
 def writer(text: str):
     with open(os.path.join(BASE_PATH, "temp.txt"), 'w') as f:
