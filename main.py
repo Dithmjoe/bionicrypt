@@ -387,6 +387,9 @@ def _camera_to_cv2(camera):
 
 class LoginScreen(Screen):
     def on_enter(self):
+        Clock.schedule_once(self._start_camera, 0.3)
+
+    def _start_camera(self, dt):
         self.camera = Camera(resolution=(640, 480), play=True, index=0)
         self.ids.login_camera_container.add_widget(self.camera)
 
@@ -433,6 +436,9 @@ class LoginScreen(Screen):
 
 class SignUpScreen(Screen):
     def on_enter(self):
+        Clock.schedule_once(self._start_camera, 0.3)
+
+    def _start_camera(self, dt):
         self.camera = Camera(resolution=(640, 480), play=True, index=0)
         self.ids.signup_camera_container.add_widget(self.camera)
 
