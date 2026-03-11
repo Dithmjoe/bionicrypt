@@ -53,7 +53,12 @@ def listOfFiles(user_name: str):
     if response.status_code == 200:
         try:
             data = response.json()
-            files = data if isinstance(data, list) else []
+            if isinstance(data, dict) and "files" in data:
+                files = data["files"]
+            elif isinstance(data, list):
+                files = data
+            else:
+                files = []
             return files
         except Exception as e:
             print(f"[listOfFiles] Parse error: {e}")

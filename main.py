@@ -544,14 +544,33 @@ class SignUpScreen(Screen):
 class DashboardScreen(Screen):
 
     def on_enter(self):
-        """Reload enc_file/ contents every time the dashboard is shown."""
+        """Fetch the user's file list from the server and display it."""
         self.ids.file_grid.clear_widgets()
-        enc_dir = os.path.join(BASE_DIR, 'enc_file')
-        os.makedirs(enc_dir, exist_ok=True)
-        for fname in sorted(os.listdir(enc_dir)):
-            fpath = os.path.join(enc_dir, fname)
-            if os.path.isfile(fpath):
+        app = App.get_running_app()
+        username = app.current_username or "unknown"
+
+        # Fetch file list from server via CRUD
+        try:
+            server_files = CRUD.listOfFiles(username)
+        except Exception as e:
+            print(f"[Dashboard] Could not fetch file list from server: {e}")
+            server_files = []
+
+        if server_files:
+            for fname in sorted(server_files):
+                # filepath points to local enc_file/ (used for download & decrypt)
+                fpath = os.path.join(BASE_DIR, 'enc_file', fname)
                 self._add_file_entry(fname, fpath)
+        else:
+            # Show a message when no files are found
+            self.ids.file_grid.add_widget(
+                Label(
+                    text='No files found on server.',
+                    color=(0.5, 0.5, 0.5, 1),
+                    size_hint_y=None,
+                    height='40dp'
+                )
+            )
 
     def logout(self):
         """Clear vault key and username, return to login screen."""
