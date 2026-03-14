@@ -34,17 +34,27 @@ def retrieveFile(user_name: str, file_name: str, dest_path: str):
         return False
 
 def retrieveVault(user_name: str, dest_path: str):
-    """Download the biometric vault for a user and save it to dest_path."""
+    """Download the biometric vault for a user and save it to dest_path.
+    Returns: 'success', 'not_found', or 'server_error'.
+    """
     url = f"http://{server_ip}/returnVault/{user_name}/vault.pkl"
-    response = requests.get(url)
+    try:
+        response = requests.get(url, timeout=10)
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        print(f"[retrieveVault] Server not responding.")
+        return "server_error"
+
     if response.status_code == 200:
         with open(dest_path, "wb") as f:
             f.write(response.content)
         print(f"[retrieveVault] Vault downloaded successfully.")
-        return True
+        return "success"
+    elif response.status_code == 404:
+        print(f"[retrieveVault] Vault not found for user '{user_name}'.")
+        return "not_found"
     else:
         print(f"[retrieveVault] Failed: {response.status_code}")
-        return False
+        return "server_error"
 
 def listOfFiles(user_name: str):
     """Return a list of filenames stored on the server for the user, or [] on failure."""

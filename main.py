@@ -418,6 +418,10 @@ class FileEntry(BoxLayout):
 
 class LoginScreen(Screen):
     def on_enter(self):
+        # wait a bit before opening camera
+        Clock.schedule_once(self.start_camera, 0.8)
+
+    def start_camera(self, dt):
         self.camera = Camera(resolution=(640, 480), play=True, index=0)
         self.ids.login_camera_container.add_widget(self.camera)
 
@@ -441,14 +445,20 @@ class LoginScreen(Screen):
             self._show_popup("Capture Error", "Could not capture image from camera.")
             return
 
-        # ── Step 1: Pull vault from server (non-fatal fallback to local) ───────
+        # ── Step 1: Pull vault from server ───────────────────────────────────
         vault_path = os.path.join(BASE_DIR, "vault.pkl")
-        try:
-            CRUD.retrieveVault(username, vault_path)
-            print(f"[Login] Vault fetched from server for '{username}'.")
-        except Exception as e:
-            print(f"[Login][CRUD] Could not fetch vault from server: {e}")
-            print("[Login] Falling back to local vault.pkl if it exists.")
+        result = CRUD.retrieveVault(username, vault_path)
+
+        if result == "server_error":
+            self._show_popup("Server Not Responding",
+                             "Could not connect to the server.\nPlease check your connection and try again.")
+            return
+        elif result == "not_found":
+            self._show_popup("Vault Not Found",
+                             f"No vault found for '{username}'.\nPlease sign up first.")
+            return
+
+        print(f"[Login] Vault fetched from server for '{username}'.")
 
         # ── Step 2: Verify face against vault ─────────────────────────────────
         print(f"Verifying vault for '{username}'...")
@@ -477,6 +487,9 @@ class LoginScreen(Screen):
 
 class SignUpScreen(Screen):
     def on_enter(self):
+        Clock.schedule_once(self.start_camera, 0.8)
+
+    def start_camera(self, dt):
         self.camera = Camera(resolution=(640, 480), play=True, index=0)
         self.ids.signup_camera_container.add_widget(self.camera)
 
