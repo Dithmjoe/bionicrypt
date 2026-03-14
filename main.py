@@ -86,6 +86,18 @@ Builder.load_string('''
                     size: self.size
                     radius: [4, ]
 
+        Label:
+            id: status_label
+            text: ''
+            font_size: '14sp'
+            size_hint_y: None
+            height: '36dp'
+            color: 0.8, 0.2, 0.2, 1
+            markup: True
+            halign: 'right'
+            valign: 'middle'
+            text_size: self.size
+
         Button:
             text: "Don't have an account? Sign Up"
             size_hint_y: None
@@ -162,6 +174,15 @@ Builder.load_string('''
                     pos: self.pos
                     size: self.size
                     radius: [4, ]
+
+        Label:
+            id: status_label
+            text: ''
+            font_size: '14sp'
+            size_hint_y: None
+            height: '36dp'
+            color: 0.8, 0.2, 0.2, 1
+            markup: True
 
         Button:
             text: "Already have an account? Login"
@@ -431,36 +452,59 @@ class LoginScreen(Screen):
             self.camera.play = False
             self.camera = None
 
+    def _set_status(self, text, is_error=True):
+        """Update the inline status label. Red for errors, blue for progress."""
+        label = self.ids.status_label
+        if is_error:
+            label.color = (0.8, 0.2, 0.2, 1)   # Red
+        else:
+            label.color = (0.15, 0.4, 0.85, 1)  # Blue
+        label.text = text
+
     def capture_and_login(self):
+        self._set_status('')  # Clear previous status
         username = self.ids.username_input.text.strip()
         if not username:
-            self._show_popup("Missing Info", "Please enter a username.")
+            self._set_status('Please enter a username.')
             return
         if not self.camera:
-            self._show_popup("Camera Error", "Camera not available.")
+            self._set_status('Camera not available.')
             return
 
         image_cv = _camera_to_cv2(self.camera)
         if image_cv is None:
-            self._show_popup("Capture Error", "Could not capture image from camera.")
+            self._set_status('Could not capture image from camera.')
             return
 
-        # ── Step 1: Pull vault from server ───────────────────────────────────
+        # Store state for the chained steps
+        self._login_image = image_cv
+        self._login_username = username
+
+        # ── Step 1: Fetch vault ───────────────────────────────────────────────
+        self._set_status('Fetching vault from server...', is_error=False)
+        Clock.schedule_once(self._login_fetch_vault, 0.1)
+
+    def _login_fetch_vault(self, dt):
+        username = self._login_username
         vault_path = os.path.join(BASE_DIR, "vault.pkl")
         result = CRUD.retrieveVault(username, vault_path)
 
         if result == "server_error":
-            self._show_popup("Server Not Responding",
-                             "Could not connect to the server.\nPlease check your connection and try again.")
+            self._set_status('Server not responding. Check your connection.')
             return
         elif result == "not_found":
-            self._show_popup("Vault Not Found",
-                             f"No vault found for '{username}'.\nPlease sign up first.")
+            self._set_status(f"Vault not found for '{username}'. Please sign up first.")
             return
 
         print(f"[Login] Vault fetched from server for '{username}'.")
 
-        # ── Step 2: Verify face against vault ─────────────────────────────────
+        # ── Step 2: Verify face ───────────────────────────────────────────────
+        self._set_status('Verifying face...', is_error=False)
+        Clock.schedule_once(self._login_verify_face, 0.1)
+
+    def _login_verify_face(self, dt):
+        username = self._login_username
+        image_cv = self._login_image
         print(f"Verifying vault for '{username}'...")
         recovered_key = cryptomatic4000.verify_vault(image_cv, username)
 
@@ -468,19 +512,11 @@ class LoginScreen(Screen):
             app = App.get_running_app()
             app.vault_key = recovered_key
             app.current_username = username
+            self._set_status('Login successful!', is_error=False)
             print(f"[Login] Successful. Key stored.")
             self.manager.current = 'dashboard'
         else:
-            self._show_popup("Verification Failed", "Face verification failed or user not found.")
-
-    def _show_popup(self, title, message):
-        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
-        content.add_widget(Label(text=message))
-        btn = Button(text='OK', size_hint=(1, 0.3))
-        content.add_widget(btn)
-        popup = Popup(title=title, content=content, size_hint=(0.8, 0.4))
-        btn.bind(on_release=popup.dismiss)
-        popup.open()
+            self._set_status('Face verification failed.')
 
 
 # ─── Sign Up Screen ───────────────────────────────────────────────────────────
@@ -499,32 +535,56 @@ class SignUpScreen(Screen):
             self.camera.play = False
             self.camera = None
 
+    def _set_status(self, text, is_error=True):
+        """Update the inline status label. Red for errors, blue for progress."""
+        label = self.ids.status_label
+        if is_error:
+            label.color = (0.8, 0.2, 0.2, 1)   # Red
+        else:
+            label.color = (0.15, 0.4, 0.85, 1)  # Blue
+        label.text = text
+
     def capture_and_signup(self):
+        self._set_status('')  # Clear previous status
         username = self.ids.signup_username.text.strip()
         if not username:
-            self._show_popup("Missing Info", "Please enter a username.")
+            self._set_status('Please enter a username.')
             return
         if not self.camera:
-            self._show_popup("Camera Error", "Camera not available.")
+            self._set_status('Camera not available.')
             return
 
         image_cv = _camera_to_cv2(self.camera)
         if image_cv is None or image_cv.size == 0:
-            self._show_popup("Capture Error", "Captured image is empty. Check your camera.")
+            self._set_status('Captured image is empty. Check your camera.')
             return
 
-        print(f"Creating vault for '{username}'...")
+        # Store state for the chained steps
+        self._signup_image = image_cv
+        self._signup_username = username
 
-        # ── Step 1: Enroll face → create local vault.pkl ──────────────────────
+        # ── Step 1: Enroll face ───────────────────────────────────────────────
+        self._set_status('Creating vault...', is_error=False)
+        Clock.schedule_once(self._signup_enroll, 0.1)
+
+    def _signup_enroll(self, dt):
+        username = self._signup_username
+        image_cv = self._signup_image
+        print(f"Creating vault for '{username}'...")
         success = cryptomatic4000.enroll_vault(image_cv, username)
 
         if not success:
-            self._show_popup("Enrollment Failed", "Could not create vault. Make sure your face is visible.")
+            self._set_status('Enrollment failed. Make sure your face is visible.')
             return
 
         print(f"[SignUp] Vault created for '{username}'.")
 
-        # ── Step 2: Upload vault to server ────────────────────────────────────
+        # ── Step 2: Upload vault ──────────────────────────────────────────────
+        self._set_status('Uploading vault to server...', is_error=False)
+        Clock.schedule_once(self._signup_upload, 0.1)
+
+    def _signup_upload(self, dt):
+        username = self._signup_username
         vault_path = os.path.join(BASE_DIR, "vault.pkl")
         try:
             CRUD.vaultUpload(username, vault_path)
@@ -532,7 +592,13 @@ class SignUpScreen(Screen):
         except Exception as e:
             print(f"[SignUp][CRUD] Vault upload failed (continuing anyway): {e}")
 
-        # ── Step 3: Verify immediately to get the vault key ───────────────────
+        # ── Step 3: Verify vault ──────────────────────────────────────────────
+        self._set_status('Verifying vault...', is_error=False)
+        Clock.schedule_once(self._signup_verify, 0.1)
+
+    def _signup_verify(self, dt):
+        image_cv = self._signup_image
+        username = self._signup_username
         recovered_key = cryptomatic4000.verify_vault(image_cv, username)
         if recovered_key:
             app = App.get_running_app()
@@ -541,15 +607,6 @@ class SignUpScreen(Screen):
             print("[SignUp] Vault key stored after enrolment.")
 
         self.manager.current = 'dashboard'
-
-    def _show_popup(self, title, message):
-        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
-        content.add_widget(Label(text=message))
-        btn = Button(text='OK', size_hint=(1, 0.3))
-        content.add_widget(btn)
-        popup = Popup(title=title, content=content, size_hint=(0.8, 0.4))
-        btn.bind(on_release=popup.dismiss)
-        popup.open()
 
 
 # ─── Dashboard Screen ─────────────────────────────────────────────────────────
