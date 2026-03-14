@@ -37,7 +37,7 @@ def retrieveVault(user_name: str, dest_path: str):
     """Download the biometric vault for a user and save it to dest_path.
     Returns: 'success', 'not_found', or 'server_error'.
     """
-    url = f"http://{server_ip}/returnVault/{user_name}/vault.pkl"
+    url = f"http://{server_ip}/returnVault/{user_name}"
     try:
         response = requests.get(url, timeout=10)
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
