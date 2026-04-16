@@ -24,21 +24,25 @@ def get_landmarks(image):
     detector = dlib.get_frontal_face_detector()
     predictor = dlib.shape_predictor(PREDICTOR_PATH)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # Improve contrast using CLAHE
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    gray = clahe.apply(gray)
 
     # Try multiple orientations for robustness
     orientations = [
-        gray,                                          # Original
-        cv2.flip(gray, 1),                             # Horizontal flip
-        cv2.flip(gray, 0),                             # Vertical flip
-        cv2.flip(gray, -1),                            # Both flips
-        cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE),
-        cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        ("Original", gray),
+        ("Flip H", cv2.flip(gray, 1)),
+        ("Rotate 90 CW", cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE)),
+        ("Rotate 90 CCW", cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)),
+        ("Rotate 180", cv2.rotate(gray, cv2.ROTATE_180))
     ]
 
     faces = None
-    for img in orientations:
-        faces = detector(img)
+    for label, img in orientations:
+        faces = detector(img, 2)  # Upsample 2 times for better detection
         if len(faces) > 0:
+            print(f"DEBUG: Face detected in {label} orientation.")
             gray = img  # Use the successful orientation
             break
 
