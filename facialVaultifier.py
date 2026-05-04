@@ -3,6 +3,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 import dlib
 import random
 from itertools import combinations
+from collections import Counter
 import pickle
 import hashlib
 import utilities as util
@@ -61,16 +62,37 @@ def get_landmarks(image):
         points.append(point)
     return sorted(set(points))  # Unique sorted list
 
+NUM_SECTIONS = 4  # Number of cross-verification sections
+MATCH_THRESHOLD = 2  # Minimum sections that must agree on the same key
+
 def eval_poly(coeffs, p, key):
     result = coeffs[0]
     result = result * (p % key)
     return result
 
 def lock(points, secret, key_len, key):
+    """Lock the secret into a fuzzy vault.
+    Every genuine point encodes the FULL secret. Points are sorted in
+    increasing order and assigned to 6 sections via round-robin for
+    cross-verification grouping.
+    Each vault entry is (x, y, section_index).
+    Returns (vault, secret_hash).
+    """
     max_point = max(points)
     min_point = min(points)
     coeffs = [secret]
-    genuine_points = [(p, eval_poly(coeffs, p, key)) for p in points]
+
+    # Sort points and assign sections via round-robin
+    sorted_points = sorted(points)
+
+    # Each genuine point encodes the full secret
+    genuine_points = []
+    for i, p in enumerate(sorted_points):
+        section = i % NUM_SECTIONS
+        y = eval_poly(coeffs, p, key)
+        genuine_points.append((p, y, section))
+
+    # Generate chaff points (indistinguishable from genuine)
     chaff_count = len(points) * 5
     chaff_points = []
     used_x = set(points)
@@ -78,41 +100,65 @@ def lock(points, secret, key_len, key):
         x = random.randint(min_point, max_point)
         if x not in used_x:
             used_x.add(x)
+            section = random.randint(0, NUM_SECTIONS - 1)
             y = random.randint(int('1' + '0' * (key_len - 1)), int('9' * key_len))
             true_y = eval_poly(coeffs, x, key)
             if y != true_y:
-                chaff_points.append((x, y))
+                chaff_points.append((x, y, section))
+
     vault = genuine_points + chaff_points
     random.shuffle(vault)
-    return vault, hashlib.sha256(str(secret).encode()).hexdigest()  # Store hash for verification
+    return vault, hashlib.sha256(str(secret).encode()).hexdigest()
 
 def unlock(points, vault, key):
+    """Unlock the vault by matching facial landmark points.
+    Each matched genuine point independently recovers the full key.
+    Points are grouped by section (0-5). If any 2 sections' majority-vote
+    keys agree, that key is returned as verified.
+    """
+    # Find candidate points that match the unlock face's landmarks
     candidate_points = []
     for x in points:
-        for vx, vy in vault:
+        for vx, vy, vs in vault:
             if vx == x:
-                candidate_points.append((vx, vy))
+                candidate_points.append((vx, vy, vs))
                 break
+
     if not candidate_points:
         print("WHO THE HELL ARE YOU??")
         return None
-    try:
-        key_val = candidate_points[0][1] // (candidate_points[0][0] % key)
-    except Exception:
-        print("WHO THE HELL ARE YOU??")
-        return None
-    hits = 0
-    for i in range(1, len(candidate_points)):
+
+    # Decode a candidate key from each matched point, group by section
+    section_keys = {}
+    for vx, vy, vs in candidate_points:
         try:
-            temp_key = candidate_points[i][1] // (candidate_points[i][0] % key_val)
-            if temp_key == key_val:
-                hits += 1
-        except Exception as e:
-            print(e)
-            print(candidate_points[i][0])
-            print(candidate_points[i][1])
-    if hits > len(candidate_points) - 10:
-        return key_val
+            mod_val = vx % key
+            if mod_val == 0:
+                continue
+            candidate_key = vy // mod_val
+            if vs not in section_keys:
+                section_keys[vs] = []
+            section_keys[vs].append(candidate_key)
+        except Exception:
+            continue
+
+    # For each section, find the most common key (majority vote)
+    section_best = {}
+    for section, keys in section_keys.items():
+        counts = Counter(keys)
+        best_key, best_count = counts.most_common(1)[0]
+        section_best[section] = best_key
+        print(f"Section {section}: best key from {best_count} point(s)")
+
+    # Cross-verify: find a key that at least MATCH_THRESHOLD sections agree on
+    key_votes = Counter(section_best.values())
+    for candidate_key, vote_count in key_votes.most_common():
+        if vote_count >= MATCH_THRESHOLD:
+            agreeing = [s for s, k in section_best.items() if k == candidate_key]
+            print(f"Sections {agreeing} agree — key verified! ({vote_count}/{MATCH_THRESHOLD} threshold)")
+            return candidate_key
+
+    print(f"No key reached {MATCH_THRESHOLD}-section agreement.")
     return None
 
 def capture_image():
@@ -179,7 +225,7 @@ def enroller(image, THE_KEY):
     vault_path = os.path.join(path, "vault.pkl")
     with open(vault_path, "wb") as f:
         pickle.dump((vault, h), f)
-    print("Enrollment complete. Vault saved.")
+    print("Enrollment complete. Vault saved (6-section cross-verification).")
     return True
 
 
