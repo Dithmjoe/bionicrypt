@@ -12,7 +12,6 @@ import os
 import bz2
 import requests
 
-
 path = os.path.dirname(__file__)
 
 # Note: Install dlib and opencv: pip install dlib opencv-python
@@ -65,8 +64,8 @@ def get_landmarks(image):
         points.append(point)
     return sorted(set(points))  # Unique sorted list
 
-NUM_SECTIONS = 4  # Number of cross-verification sections
-MATCH_THRESHOLD = 2  # Minimum sections that must agree on the same key
+NUM_SECTIONS = 4 # Number of cross-verification sections
+MATCH_THRESHOLD = 3 # Minimum sections that must agree on the same key
 
 def eval_poly(coeffs, p, key):
     result = coeffs[0]
@@ -75,27 +74,19 @@ def eval_poly(coeffs, p, key):
 
 def lock(points, secret, key_len, key):
     """Lock the secret into a fuzzy vault.
-    Every genuine point encodes the FULL secret. Points are sorted in
-    increasing order and assigned to 6 sections via round-robin for
-    cross-verification grouping.
-    Each vault entry is (x, y, section_index).
+    Every genuine point encodes the FULL secret.
+    Vault entries are plain (x, y) tuples — no section metadata stored.
+    Sections are assigned dynamically at unlock time.
     Returns (vault, secret_hash).
     """
     max_point = max(points)
     min_point = min(points)
     coeffs = [secret]
 
-    # Sort points and assign sections via round-robin
-    sorted_points = sorted(points)
-
     # Each genuine point encodes the full secret
-    genuine_points = []
-    for i, p in enumerate(sorted_points):
-        section = i % NUM_SECTIONS
-        y = eval_poly(coeffs, p, key)
-        genuine_points.append((p, y, section))
+    genuine_points = [(p, eval_poly(coeffs, p, key)) for p in points]
 
-    # Generate chaff points (indistinguishable from genuine)
+    # Generate chaff points
     chaff_count = len(points) * 5
     chaff_points = []
     used_x = set(points)
@@ -103,11 +94,10 @@ def lock(points, secret, key_len, key):
         x = random.randint(min_point, max_point)
         if x not in used_x:
             used_x.add(x)
-            section = random.randint(0, NUM_SECTIONS - 1)
             y = random.randint(int('1' + '0' * (key_len - 1)), int('9' * key_len))
             true_y = eval_poly(coeffs, x, key)
             if y != true_y:
-                chaff_points.append((x, y, section))
+                chaff_points.append((x, y))
 
     vault = genuine_points + chaff_points
     random.shuffle(vault)
@@ -115,37 +105,40 @@ def lock(points, secret, key_len, key):
 
 def unlock(points, vault, key):
     """Unlock the vault by matching facial landmark points.
-    Each matched genuine point independently recovers the full key.
-    Points are grouped by section (0-5). If any 2 sections' majority-vote
-    keys agree, that key is returned as verified.
+    Each matched point independently recovers a candidate key.
+    Sections are assigned dynamically at runtime (round-robin by sorted x).
+    If MATCH_THRESHOLD sections agree on the same key, it is verified.
     """
     # Find candidate points that match the unlock face's landmarks
     candidate_points = []
     for x in points:
-        for vx, vy, vs in vault:
+        for vx, vy in vault:          # vault stores plain (x, y) — no section
             if vx == x:
-                candidate_points.append((vx, vy, vs))
+                candidate_points.append((vx, vy))
                 break
 
     if not candidate_points:
         print("WHO THE HELL ARE YOU??")
         return None
 
-    # Decode a candidate key from each matched point, group by section
+    # Sort by x then assign sections dynamically via round-robin
+    candidate_points.sort(key=lambda p: p[0])
+
     section_keys = {}
-    for vx, vy, vs in candidate_points:
+    for i, (vx, vy) in enumerate(candidate_points):
+        section = i % NUM_SECTIONS   # section is temporary — not from vault
         try:
             mod_val = vx % key
             if mod_val == 0:
                 continue
             candidate_key = vy // mod_val
-            if vs not in section_keys:
-                section_keys[vs] = []
-            section_keys[vs].append(candidate_key)
+            if section not in section_keys:
+                section_keys[section] = []
+            section_keys[section].append(candidate_key)
         except Exception:
             continue
 
-    # For each section, find the most common key (majority vote)
+    # For each section, majority-vote the most common candidate key
     section_best = {}
     for section, keys in section_keys.items():
         counts = Counter(keys)
@@ -153,7 +146,7 @@ def unlock(points, vault, key):
         section_best[section] = best_key
         print(f"Section {section}: best key from {best_count} point(s)")
 
-    # Cross-verify: find a key that at least MATCH_THRESHOLD sections agree on
+    # Cross-verify: need MATCH_THRESHOLD sections to agree on the same key
     key_votes = Counter(section_best.values())
     for candidate_key, vote_count in key_votes.most_common():
         if vote_count >= MATCH_THRESHOLD:
@@ -231,18 +224,17 @@ def enroller(image, THE_KEY):
     print("Enrollment complete. Vault saved (6-section cross-verification).")
     return True
 
-
 def download_landmarks():
-    file_name = "shape_predictor_68_face_landmarks.dat"
+    file_name = os.path.join(path, "shape_predictor_68_face_landmarks.dat")
     bz2_name = file_name + ".bz2"
     url = "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2"
 
     if not os.path.exists(file_name):
         print("Downloading face landmarks model (this may take a minute)...")
-        with requests.get(url, stream=True) as r, open(bz2_name, 'wb') as f:  # ✅ open file once
+        with requests.get(url, stream=True) as r, open(bz2_name, 'wb') as f:
             for chunk in r.iter_content(chunk_size=1024):
                 if chunk:
-                    f.write(chunk)  # ✅ append each chunk to the same open file
+                    f.write(chunk)
 
         print("Decompressing file...")
         with bz2.BZ2File(bz2_name) as fr, open(file_name, 'wb') as fw:
@@ -250,6 +242,8 @@ def download_landmarks():
 
         os.remove(bz2_name)
         print("Done!")
+    else:
+        print("Landmarks model already exists, skipping download.")
 
 if __name__ == "__main__":
     mode = input("Enter mode (enroll/verify): ").strip().lower()
