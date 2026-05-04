@@ -13,3 +13,8 @@ test.py
 *.enc
 
 *_restored.*
+
+venv/
+
+dec_file/
+enc_file/

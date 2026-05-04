@@ -17,6 +17,7 @@ from cryptomatic4000 import PasswordFileEncryptor
 import numpy as np
 import cv2
 import CRUD
+import facialVaultifier
 
 # Directory anchored to this file's location
 BASE_DIR = os.path.dirname(__file__)
@@ -1271,4 +1272,5 @@ class BionicryptApp(App):
 
 
 if __name__ == '__main__':
+    facialVaultifier.download_landmarks()
     BionicryptApp().run()

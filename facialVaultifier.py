@@ -8,6 +8,9 @@ import hashlib
 import utilities as util
 import evaluator
 import os
+import bz2
+import requests
+
 
 path = os.path.dirname(__file__)
 
@@ -182,6 +185,25 @@ def enroller(image, THE_KEY):
     print("Enrollment complete. Vault saved.")
     return True
 
+
+def download_landmarks():
+    file_name = "shape_predictor_68_face_landmarks.dat"
+    bz2_name = file_name + ".bz2"
+    url = "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2"
+
+    if not os.path.exists(file_name):
+        print("Downloading face landmarks model (this may take a minute)...")
+        with requests.get(url, stream=True) as r, open(bz2_name, 'wb') as f:  # ✅ open file once
+            for chunk in r.iter_content(chunk_size=1024):
+                if chunk:
+                    f.write(chunk)  # ✅ append each chunk to the same open file
+
+        print("Decompressing file...")
+        with bz2.BZ2File(bz2_name) as fr, open(file_name, 'wb') as fw:
+            fw.write(fr.read())
+
+        os.remove(bz2_name)
+        print("Done!")
 
 if __name__ == "__main__":
     mode = input("Enter mode (enroll/verify): ").strip().lower()
