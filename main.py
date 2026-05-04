@@ -730,8 +730,14 @@ class SignUpScreen(Screen):
         username = self._signup_username
         vault_path = os.path.join(BASE_DIR, "vault.pkl")
         try:
-            CRUD.vaultUpload(username, vault_path)
-            print(f"[SignUp] Vault uploaded to server for '{username}'.")
+            result = CRUD.vaultUpload(username, vault_path)
+            if result == 'already_exists':
+                self._set_status(f"User '{username}' already exists. Please log in instead.", is_error=True)
+                return
+            elif result == 'error':
+                print(f"[SignUp][CRUD] Vault upload failed.")
+            else:
+                print(f"[SignUp] Vault uploaded to server for '{username}'.")
         except Exception as e:
             print(f"[SignUp][CRUD] Vault upload failed (continuing anyway): {e}")
 

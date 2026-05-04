@@ -12,13 +12,21 @@ def fileUpload(user_name: str, file_path: str):
     print(f"[fileUpload] Status: {response.status_code} | Response: {response.json()}")
 
 def vaultUpload(user_name: str, vault_path: str):
-    """Upload the biometric vault to the server."""
+    """Upload the biometric vault to the server.
+    Returns: 'success', 'already_exists', or 'error'.
+    """
     url = f"http://{server_ip}/registration/{user_name}"
     print(f"[vaultUpload] URL: {url}")
     with open(vault_path, "rb") as f:
         vault = {"vault": (vault_path, f)}
         response = requests.post(url, files=vault)
     print(f"[vaultUpload] Status: {response.status_code} | Response: {response.json()}")
+    if response.status_code == 200:
+        return 'success'
+    elif response.status_code == 400:
+        return 'already_exists'
+    else:
+        return 'error'
 
 def retrieveFile(user_name: str, file_name: str, dest_path: str):
     """Download an encrypted file from the server and save it to dest_path."""
